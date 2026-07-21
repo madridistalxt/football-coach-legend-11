@@ -47,6 +47,16 @@ const TACTICAL_COUNTERS = Object.freeze({
     explanation: '持续控球减少攻防转换次数，传控方获得中场控制与防守稳定性加成。',
   },
 });
+const SHOT_AREA_LABELS = Object.freeze({
+  'inside-box': '禁区内',
+  'outside-box': '禁区外',
+  penalty: '点球',
+});
+const SHOT_LANE_LABELS = Object.freeze({
+  left: '左侧',
+  center: '中路',
+  right: '右侧',
+});
 
 const mime = {
   '.html': 'text/html; charset=utf-8',
@@ -529,7 +539,7 @@ function weightedDefender(player, random) {
 }
 
 function addMatchEvent(match, revealAt, clock, type, side, text, important = false, detail = {}) {
-  match.events.push({
+  const event = {
     id: `${match.events.length + 1}`,
     revealAt: Math.max(0, Math.round(revealAt)),
     clock,
@@ -540,7 +550,138 @@ function addMatchEvent(match, revealAt, clock, type, side, text, important = fal
     score: [...match._score],
     penalty: [...match._penalty],
     ...detail,
+  };
+  match.events.push(event);
+  return event;
+}
+
+function shotLaneFromRoll(roll) {
+  if (roll < .3) return 'left';
+  if (roll > .7) return 'right';
+  return 'center';
+}
+
+function shotCoordinates(zone, lane, random) {
+  const x = zone === 'penalty'
+    ? 88
+    : zone === 'inside-box'
+      ? 82 + Math.round(random() * 14)
+      : 61 + Math.round(random() * 18);
+  const laneRanges = {
+    left: [18, 39],
+    center: [40, 60],
+    right: [61, 82],
+  };
+  const [from, to] = laneRanges[lane];
+  return { x, y: from + Math.round(random() * (to - from)) };
+}
+
+function normalShotProfile(match, key, side, minute, shooter, teams, chanceQuality) {
+  const random = mulberry32(hashSeed(`${match.seed}|shot-profile|${key}|${side}|${minute}|${match.events.length}`));
+  const attackGap = teams[side].attack - teams[1 - side].defense;
+  const insideProbability = clamp(.63 + attackGap / 330, .48, .82);
+  const zone = random() < insideProbability ? 'inside-box' : 'outside-box';
+  const lane = shotLaneFromRoll(random());
+  const baseXg = zone === 'inside-box'
+    ? (lane === 'center' ? .24 : .15)
+    : (lane === 'center' ? .075 : .045);
+  const shootingAdjustment = (shooter.stats.sho - 75) / 620;
+  const chanceAdjustment = (chanceQuality - .1) * .5;
+  const variance = .82 + random() * .36;
+  const xG = Number(clamp((baseXg + shootingAdjustment + chanceAdjustment) * variance, .02, .52).toFixed(3));
+  const coordinates = shotCoordinates(zone, lane, random);
+  return {
+    xG,
+    shotArea: {
+      zone,
+      zoneLabel: SHOT_AREA_LABELS[zone],
+      lane,
+      laneLabel: SHOT_LANE_LABELS[lane],
+      label: `${SHOT_AREA_LABELS[zone]}·${SHOT_LANE_LABELS[lane]}`,
+      ...coordinates,
+    },
+  };
+}
+
+function penaltyShotProfile(match, side, round, scoringChance) {
+  const random = mulberry32(hashSeed(`${match.seed}|penalty-profile|${side}|${round}|${match.events.length}`));
+  const zone = 'penalty';
+  const lane = shotLaneFromRoll(random());
+  return {
+    xG: Number(clamp(scoringChance, .55, .9).toFixed(3)),
+    shotArea: {
+      zone,
+      zoneLabel: SHOT_AREA_LABELS[zone],
+      lane,
+      laneLabel: SHOT_LANE_LABELS[lane],
+      label: `${SHOT_AREA_LABELS[zone]}·${SHOT_LANE_LABELS[lane]}`,
+      ...shotCoordinates(zone, lane, random),
+    },
+  };
+}
+
+function addShotEvent(match, {
+  revealAt,
+  clock,
+  type,
+  eventSide,
+  attackingSide,
+  text,
+  important = false,
+  shooter,
+  outcome,
+  profile,
+  detail = {},
+  phase = 'match',
+  countsTowardStats = true,
+}) {
+  const event = addMatchEvent(match, revealAt, clock, type, eventSide, text, important, {
+    ...detail,
+    shooterId: shooter.id,
+    xG: profile.xG,
+    shotArea: profile.shotArea,
+    shotOutcome: outcome,
+    shotPhase: phase,
+    countsTowardStats,
   });
+  match._shotMap[attackingSide].push({
+    eventId: event.id,
+    side: attackingSide,
+    clock,
+    minute: Number.parseInt(clock, 10) || null,
+    playerId: shooter.id,
+    playerName: shooter.name,
+    outcome,
+    xG: profile.xG,
+    shotArea: { ...profile.shotArea },
+    phase,
+    countsTowardStats,
+    score: [...event.score],
+    penalty: [...event.penalty],
+  });
+  return event;
+}
+
+function summarizeShotDistribution(shots) {
+  const countBy = (values, key) => values.reduce((result, shot) => {
+    const value = key(shot);
+    result[value] = (result[value] || 0) + 1;
+    return result;
+  }, {});
+  const byZone = { 'inside-box': 0, 'outside-box': 0, penalty: 0, ...countBy(shots, shot => shot.shotArea.zone) };
+  const byLane = { left: 0, center: 0, right: 0, ...countBy(shots, shot => shot.shotArea.lane) };
+  const outcomes = {
+    goals: shots.filter(shot => ['goal', 'penalty-goal'].includes(shot.outcome)).length,
+    saved: shots.filter(shot => shot.outcome === 'saved').length,
+    offTarget: shots.filter(shot => ['off-target', 'penalty-miss'].includes(shot.outcome)).length,
+  };
+  return {
+    total: shots.length,
+    expectedGoals: Number(shots.reduce((sum, shot) => sum + shot.xG, 0).toFixed(2)),
+    byZone,
+    byLane,
+    outcomes,
+  };
 }
 
 function refreshMatchStats(match) {
@@ -549,18 +690,348 @@ function refreshMatchStats(match) {
     : 50;
   match.score = [...match._score];
   match.penalties = [...match._penalty];
+  const matchShots = match._shotMap.map(shots => shots.filter(shot => shot.countsTowardStats !== false));
+  const shootoutShots = match._shotMap.map(shots => shots.filter(shot => shot.phase === 'shootout'));
+  const serializeShots = shots => shots.map(shot => ({
+    ...shot,
+    shotArea: { ...shot.shotArea },
+    score: [...shot.score],
+    penalty: [...shot.penalty],
+  }));
+  match.shotMap = matchShots.map(serializeShots);
+  match.shootoutShotMap = shootoutShots.map(serializeShots);
+  match.shotDistribution = matchShots.map(summarizeShotDistribution);
+  match.shootoutShotDistribution = shootoutShots.map(summarizeShotDistribution);
   match.stats = [
     {
       ...match._stats[0],
       possession: possessionHome,
       passAccuracy: clamp(Math.round(82 + (match.teams[0].midfield - 75) * .25), 76, 94),
+      expectedGoals: match.shotDistribution[0].expectedGoals,
+      shotDistribution: match.shotDistribution[0],
     },
     {
       ...match._stats[1],
       possession: 100 - possessionHome,
       passAccuracy: clamp(Math.round(82 + (match.teams[1].midfield - 75) * .25), 76, 94),
+      expectedGoals: match.shotDistribution[1].expectedGoals,
+      shotDistribution: match.shotDistribution[1],
     },
   ];
+}
+
+function percent(value, total) {
+  return Number((total > 0 ? value / total * 100 : 0).toFixed(1));
+}
+
+function mentalitySummary(match, room, side) {
+  const player = room.players[side];
+  const timeline = [{ minute: 0, mentality: 'balanced', label: MENTALITIES.balanced.name }];
+  for (const intervention of match.interventions) {
+    const submission = intervention.submissions.find(item => item.playerId === player.id);
+    if (!submission) continue;
+    timeline.push({
+      minute: intervention.minute,
+      mentality: submission.mentality,
+      label: MENTALITIES[submission.mentality].name,
+      score: [...intervention.score],
+      submitted: submission.submitted,
+    });
+  }
+  return {
+    final: player.mentality || 'balanced',
+    finalLabel: MENTALITIES[player.mentality || 'balanced'].name,
+    timeline,
+  };
+}
+
+function substitutionSummary(match, side) {
+  const goalEvents = match.events.filter(event => event.type === 'goal');
+  return match.substitutions[side].map(substitution => {
+    const incoming = PLAYER_BY_ID[substitution.inCardId];
+    const outgoing = PLAYER_BY_ID[substitution.outCardId];
+    return {
+      ...substitution,
+      incomingName: incoming.name,
+      outgoingName: outgoing.name,
+      goals: goalEvents.filter(event => event.side === side && event.playerId === incoming.id).length,
+      assists: goalEvents.filter(event => event.side === side && event.assistId === incoming.id).length,
+    };
+  });
+}
+
+function teamRecap(room, match, side, winnerSide) {
+  const player = room.players[side];
+  const stats = match.stats[side];
+  const team = match.teams[side];
+  const substitutions = substitutionSummary(match, side);
+  const goals = match.score[side];
+  const averageRating = match.playerRatings[side].length
+    ? match.playerRatings[side].reduce((sum, item) => sum + item.rating * item.minutesPlayed, 0)
+      / Math.max(1, match.playerRatings[side].reduce((sum, item) => sum + item.minutesPlayed, 0))
+    : 0;
+  return {
+    side,
+    playerId: player.id,
+    name: player.name,
+    result: side === winnerSide ? 'win' : 'loss',
+    score: goals,
+    expectedGoals: stats.expectedGoals,
+    shots: stats.shots,
+    onTarget: stats.onTarget,
+    shotEfficiency: {
+      conversionRate: percent(goals, stats.shots),
+      onTargetRate: percent(stats.onTarget, stats.shots),
+      xGPerShot: Number((stats.shots ? stats.expectedGoals / stats.shots : 0).toFixed(3)),
+      goalsMinusXG: Number((goals - stats.expectedGoals).toFixed(2)),
+    },
+    positionFit: {
+      score: team.positionFit.score,
+      naturalCount: team.positionFit.naturalCount,
+      adaptedCount: team.positionFit.adaptedCount,
+      outOfPositionCount: team.positionFit.outOfPositionCount,
+    },
+    chemistry: {
+      score: team.chemistry.score,
+      links: { ...team.chemistry.links },
+    },
+    tactic: {
+      id: player.tactic,
+      name: TACTICS[player.tactic].name,
+      finalStatus: team.tacticalMatchup?.status || 'neutral',
+      phases: match.tacticalPhases.map(phase => ({
+        segment: phase.segment,
+        status: phase.teams[side].tacticalStatus,
+      })),
+    },
+    mentality: mentalitySummary(match, room, side),
+    substitutions: {
+      used: substitutions.length,
+      goalContributions: substitutions.reduce((sum, item) => sum + item.goals + item.assists, 0),
+      changes: substitutions,
+    },
+    averageRating: Number(averageRating.toFixed(2)),
+  };
+}
+
+function tacticalRecap(room, match, winnerSide) {
+  const phases = match.tacticalPhases.map(phase => ({
+    segment: phase.segment,
+    fromMinute: phase.fromMinute,
+    toMinute: phase.toMinute,
+    mentalities: [...phase.mentalities],
+    advantagedSide: phase.matchup?.winnerSide ?? null,
+    disadvantagedSide: phase.matchup?.loserSide ?? null,
+    title: phase.matchup?.title || '战术均势',
+    explanation: phase.matchup?.explanation || '双方战术没有形成直接克制。',
+    teams: phase.teams.map(team => ({ ...team })),
+  }));
+  const advantagedSides = phases.map(phase => phase.advantagedSide).filter(side => side !== null);
+  const stableAdvantagedSide = advantagedSides.length && advantagedSides.every(side => side === advantagedSides[0])
+    ? advantagedSides[0]
+    : null;
+  const convertedToVictory = stableAdvantagedSide !== null ? stableAdvantagedSide === winnerSide : null;
+  return {
+    status: stableAdvantagedSide === null ? 'neutral-or-mixed' : 'stable-advantage',
+    advantagedSide: stableAdvantagedSide,
+    disadvantagedSide: stableAdvantagedSide === null ? null : 1 - stableAdvantagedSide,
+    convertedToVictory,
+    summary: stableAdvantagedSide === null
+      ? '双方没有形成持续、明确的战术克制关系。'
+      : convertedToVictory
+        ? `${room.players[stableAdvantagedSide].name}将战术克制优势转化为胜势。`
+        : `${room.players[stableAdvantagedSide].name}形成战术优势，但未能将优势转化为胜利。`,
+    phases,
+  };
+}
+
+function lossReason(code, category, label, detail, weight, metrics = {}) {
+  return { code, category, label, detail, weight: Math.round(weight), metrics };
+}
+
+function buildLossAnalysis(room, match, teamSummaries, tacticalSummary, winnerSide) {
+  const loserSide = 1 - winnerSide;
+  const winner = teamSummaries[winnerSide];
+  const loser = teamSummaries[loserSide];
+  const reasons = [];
+  const xgGap = winner.expectedGoals - loser.expectedGoals;
+  const conversionGap = winner.shotEfficiency.conversionRate - loser.shotEfficiency.conversionRate;
+  const fitGap = winner.positionFit.score - loser.positionFit.score;
+  const chemistryGap = winner.chemistry.score - loser.chemistry.score;
+
+  if (match.decision === 'penalties') {
+    reasons.push(lossReason(
+      'penalty-shootout',
+      'score',
+      '点球决胜失利',
+      `双方在120分钟内战平，${loser.name}在点球大战中以 ${match.penalties[loserSide]} - ${match.penalties[winnerSide]} 落败。`,
+      100,
+      { penalties: [...match.penalties] },
+    ));
+  }
+
+  if (xgGap >= .25) {
+    reasons.push(lossReason(
+      'xg-deficit',
+      'chance-creation',
+      '高质量机会不足',
+      `${loser.name}的预期进球为 ${loser.expectedGoals}，低于对手的 ${winner.expectedGoals}。`,
+      62 + xgGap * 12,
+      { loserXG: loser.expectedGoals, winnerXG: winner.expectedGoals, gap: Number(xgGap.toFixed(2)) },
+    ));
+  } else if (loser.expectedGoals - winner.expectedGoals >= .25 && loser.result === 'loss') {
+    reasons.push(lossReason(
+      'xg-not-converted',
+      'finishing',
+      '机会未能兑现',
+      `${loser.name}创造了更多预期进球，却未能把场面优势转化为比分。`,
+      78,
+      { loserXG: loser.expectedGoals, winnerXG: winner.expectedGoals },
+    ));
+  }
+
+  if (conversionGap >= 5 || loser.shotEfficiency.goalsMinusXG <= -.35) {
+    reasons.push(lossReason(
+      'finishing-efficiency',
+      'finishing',
+      '终结效率落后',
+      `${loser.name}射门转化率 ${loser.shotEfficiency.conversionRate}%，对手为 ${winner.shotEfficiency.conversionRate}%。`,
+      58 + Math.max(0, conversionGap),
+      {
+        loserConversionRate: loser.shotEfficiency.conversionRate,
+        winnerConversionRate: winner.shotEfficiency.conversionRate,
+        loserGoalsMinusXG: loser.shotEfficiency.goalsMinusXG,
+      },
+    ));
+  }
+
+  if (fitGap >= 4) {
+    reasons.push(lossReason(
+      'position-fit-gap',
+      'lineup',
+      '位置适配处于劣势',
+      `${loser.name}的位置适配为 ${loser.positionFit.score}，比对手低 ${fitGap} 点。`,
+      42 + fitGap,
+      { loser: loser.positionFit.score, winner: winner.positionFit.score, gap: fitGap },
+    ));
+  }
+
+  if (chemistryGap >= 5) {
+    reasons.push(lossReason(
+      'chemistry-gap',
+      'lineup',
+      '球队默契不足',
+      `${loser.name}的默契为 ${loser.chemistry.score}，对手为 ${winner.chemistry.score}。`,
+      38 + chemistryGap,
+      { loser: loser.chemistry.score, winner: winner.chemistry.score, gap: chemistryGap },
+    ));
+  }
+
+  const counteredPhases = tacticalSummary.phases.filter(phase => phase.disadvantagedSide === loserSide);
+  if (counteredPhases.length) {
+    reasons.push(lossReason(
+      'tactically-countered',
+      'tactics',
+      '战术受到克制',
+      `${loser.name}在 ${counteredPhases.map(phase => `${phase.fromMinute}-${phase.toMinute}分钟`).join('、')} 受到对手战术克制。`,
+      64,
+      { phases: counteredPhases.map(phase => phase.segment), advantagedSide: winnerSide },
+    ));
+  }
+
+  const conservativeWhileTrailing = match.interventions.some(intervention => {
+    const submission = intervention.submissions.find(item => item.playerId === loser.playerId);
+    return submission?.mentality === 'defensive' && intervention.score[loserSide] < intervention.score[winnerSide];
+  });
+  if (conservativeWhileTrailing) {
+    reasons.push(lossReason(
+      'conservative-while-trailing',
+      'mentality',
+      '落后时调整偏保守',
+      `${loser.name}在落后阶段选择稳守反击，追平所需的进攻投入不足。`,
+      48,
+    ));
+  }
+
+  const attackingRisk = [...match.interventions].reverse().find(intervention => {
+    const submission = intervention.submissions.find(item => item.playerId === loser.playerId);
+    return submission?.mentality === 'attacking' && match.score[winnerSide] > intervention.score[winnerSide];
+  });
+  if (attackingRisk) {
+    reasons.push(lossReason(
+      'attacking-risk',
+      'mentality',
+      '压上后的防守风险',
+      `${loser.name}在 ${attackingRisk.minute} 分钟转为全力进攻后仍有失球，阵型前压带来了防守空间。`,
+      44,
+    ));
+  }
+
+  if (winner.substitutions.goalContributions > loser.substitutions.goalContributions) {
+    reasons.push(lossReason(
+      'substitution-impact',
+      'substitutions',
+      '换人贡献不及对手',
+      `对手替补贡献 ${winner.substitutions.goalContributions} 次进球参与，${loser.name}替补贡献 ${loser.substitutions.goalContributions} 次。`,
+      52,
+      { loser: loser.substitutions.goalContributions, winner: winner.substitutions.goalContributions },
+    ));
+  } else if (loser.substitutions.used === 0 && winner.substitutions.used > 0) {
+    reasons.push(lossReason(
+      'limited-substitutions',
+      'substitutions',
+      '临场换人不足',
+      `${loser.name}没有使用换人，对手完成了 ${winner.substitutions.used} 次人员调整。`,
+      30,
+      { loserUsed: 0, winnerUsed: winner.substitutions.used },
+    ));
+  }
+
+  if (!reasons.length) {
+    reasons.push(lossReason(
+      'fine-margins',
+      'score',
+      '胜负取决于关键细节',
+      `双方核心指标接近，${loser.name}在关键回合的处理稍逊一筹。`,
+      35,
+    ));
+  }
+
+  reasons.sort((a, b) => {
+    if (a.code === 'penalty-shootout') return -1;
+    if (b.code === 'penalty-shootout') return 1;
+    return b.weight - a.weight;
+  });
+  return {
+    loserSide,
+    loserId: loser.playerId,
+    primaryReason: reasons[0],
+    reasons,
+    summary: `${loser.name}失利的首要因素是“${reasons[0].label}”。${reasons[0].detail}`,
+  };
+}
+
+function buildMatchRecap(room, match) {
+  const winnerSide = room.players.findIndex(player => player.id === match.winnerId);
+  const teams = room.players.map((_, side) => teamRecap(room, match, side, winnerSide));
+  const tacticalSummary = tacticalRecap(room, match, winnerSide);
+  const loserAnalysis = buildLossAnalysis(room, match, teams, tacticalSummary, winnerSide);
+  return {
+    version: 1,
+    result: {
+      winnerSide,
+      loserSide: 1 - winnerSide,
+      decision: match.decision,
+      score: [...match.score],
+      regularScore: [...match.regularScore],
+      extraScore: [...match.extraScore],
+      penalties: [...match.penalties],
+    },
+    tacticalSummary,
+    teams,
+    decisiveFactors: loserAnalysis.reasons.slice(0, 4),
+    loserAnalysis,
+  };
 }
 
 function simulateRange(room, match, { from, to, durationMs, revealBase, key }) {
@@ -591,15 +1062,30 @@ function simulateRange(room, match, { from, to, durationMs, revealBase, key }) {
     );
     const revealAt = revealBase + 500 + (minute - from + 1) / rangeMinutes * Math.max(1_000, durationMs - 1_000);
     const roll = random();
+    const shotProfile = roll < chanceQuality + .4
+      ? normalShotProfile(match, key, side, minute, attacker.card, teams, chanceQuality)
+      : null;
 
     if (roll < chanceQuality) {
       match._score[side] += 1;
       match._stats[side].shots += 1;
       match._stats[side].onTarget += 1;
       const assist = weightedAttacker(room.players[side], random);
-      addMatchEvent(match, revealAt, `${minute}′`, 'goal', side, `${attacker.card.name}冷静终结！${room.players[side].name}取得进球。`, true, {
-        playerId: attacker.card.id,
-        assistId: assist?.card.id === attacker.card.id ? null : assist?.card.id,
+      addShotEvent(match, {
+        revealAt,
+        clock: `${minute}′`,
+        type: 'goal',
+        eventSide: side,
+        attackingSide: side,
+        text: `${attacker.card.name}冷静终结！${room.players[side].name}取得进球。`,
+        important: true,
+        shooter: attacker.card,
+        outcome: 'goal',
+        profile: shotProfile,
+        detail: {
+          playerId: attacker.card.id,
+          assistId: assist?.card.id === attacker.card.id ? null : assist?.card.id,
+        },
       });
     } else if (roll < chanceQuality + .19) {
       match._stats[side].shots += 1;
@@ -607,11 +1093,34 @@ function simulateRange(room, match, { from, to, durationMs, revealBase, key }) {
       match._stats[other].saves += 1;
       const keeperSlot = room.players[other].lineup.find((_, index) => FORMATIONS[room.players[other].formation].slots[index].role === 'GK');
       const keeperName = keeperSlot ? PLAYER_BY_ID[keeperSlot.cardId].name : defender.card.name;
-      addMatchEvent(match, revealAt, `${minute}′`, 'save', other, `${attacker.card.name}的射门直奔死角，${keeperName}做出关键扑救！`, true, { playerId: keeperSlot?.cardId });
+      addShotEvent(match, {
+        revealAt,
+        clock: `${minute}′`,
+        type: 'save',
+        eventSide: other,
+        attackingSide: side,
+        text: `${attacker.card.name}的射门直奔死角，${keeperName}做出关键扑救！`,
+        important: true,
+        shooter: attacker.card,
+        outcome: 'saved',
+        profile: shotProfile,
+        detail: { playerId: keeperSlot?.cardId, keeperId: keeperSlot?.cardId },
+      });
     } else if (roll < chanceQuality + .4) {
       match._stats[side].shots += 1;
       if (random() < .3) match._stats[side].corners += 1;
-      addMatchEvent(match, revealAt, `${minute}′`, 'shot', side, `${attacker.card.name}获得起脚空间，皮球稍稍偏出。`, false, { playerId: attacker.card.id });
+      addShotEvent(match, {
+        revealAt,
+        clock: `${minute}′`,
+        type: 'shot',
+        eventSide: side,
+        attackingSide: side,
+        text: `${attacker.card.name}获得起脚空间，皮球稍稍偏出。`,
+        shooter: attacker.card,
+        outcome: 'off-target',
+        profile: shotProfile,
+        detail: { playerId: attacker.card.id },
+      });
     } else if (roll < chanceQuality + .52) {
       match._stats[other].fouls += 1;
       if (random() < .42) {
@@ -665,9 +1174,23 @@ function finishMatchSimulation(room, match, regularDurationMs, revealBase) {
         if (round >= 9 && side === 1 && match._penalty[0] === match._penalty[1]) scored = random() < .45;
         if (scored) match._penalty[side] += 1;
         kickIndex += 1;
-        addMatchEvent(match, penaltyBase + Math.min(5_500, kickIndex * 420), `点球${round}`, scored ? 'penalty-goal' : 'penalty-miss', side, scored
-          ? `${kicker.card.name}主罚命中，点球比分 ${match._penalty[0]} - ${match._penalty[1]}。`
-          : `${kicker.card.name}罚失点球！点球比分 ${match._penalty[0]} - ${match._penalty[1]}。`, true, { playerId: kicker.card.id, penaltyRound: round });
+        addShotEvent(match, {
+          revealAt: penaltyBase + Math.min(5_500, kickIndex * 420),
+          clock: `点球${round}`,
+          type: scored ? 'penalty-goal' : 'penalty-miss',
+          eventSide: side,
+          attackingSide: side,
+          text: scored
+            ? `${kicker.card.name}主罚命中，点球比分 ${match._penalty[0]} - ${match._penalty[1]}。`
+            : `${kicker.card.name}罚失点球！点球比分 ${match._penalty[0]} - ${match._penalty[1]}。`,
+          important: true,
+          shooter: kicker.card,
+          outcome: scored ? 'penalty-goal' : 'penalty-miss',
+          profile: penaltyShotProfile(match, side, round, scoringChance),
+          phase: 'shootout',
+          countsTowardStats: false,
+          detail: { playerId: kicker.card.id, penaltyRound: round },
+        });
 
         if (round <= 5) {
           const homeRemaining = 5 - round;
@@ -685,7 +1208,21 @@ function finishMatchSimulation(room, match, regularDurationMs, revealBase) {
         const finalSide = Math.floor(random() * 2);
         const finalKicker = weightedAttacker(room.players[finalSide], random);
         match._penalty[finalSide] += 1;
-        addMatchEvent(match, penaltyBase + 5_700, `点球${round + 1}`, 'penalty-goal', finalSide, `${finalKicker.card.name}打入终极点球！点球比分 ${match._penalty[0]} - ${match._penalty[1]}。`, true, { playerId: finalKicker.card.id, penaltyRound: round + 1 });
+        addShotEvent(match, {
+          revealAt: penaltyBase + 5_700,
+          clock: `点球${round + 1}`,
+          type: 'penalty-goal',
+          eventSide: finalSide,
+          attackingSide: finalSide,
+          text: `${finalKicker.card.name}打入终极点球！点球比分 ${match._penalty[0]} - ${match._penalty[1]}。`,
+          important: true,
+          shooter: finalKicker.card,
+          outcome: 'penalty-goal',
+          profile: penaltyShotProfile(match, finalSide, round + 1, .76),
+          phase: 'shootout',
+          countsTowardStats: false,
+          detail: { playerId: finalKicker.card.id, penaltyRound: round + 1 },
+        });
         resolved = true;
       }
     }
@@ -708,18 +1245,37 @@ function finishMatchSimulation(room, match, regularDurationMs, revealBase) {
   match.winnerId = winner.id;
   match.loserId = loser.id;
   const goalScorers = match.events.filter(event => event.type === 'goal');
+  const finalMinute = decision === 'regular' ? 90 : 120;
   match.playerRatings = room.players.map((player, side) => [...match._participants[side]].map(cardId => {
     const card = PLAYER_BY_ID[cardId];
     const goals = goalScorers.filter(event => event.side === side && event.playerId === card.id).length;
     const assists = goalScorers.filter(event => event.side === side && event.assistId === card.id).length;
+    const startingSlot = match._startingLineups[side].indexOf(cardId);
+    const started = startingSlot >= 0;
+    const entered = match.substitutions[side].find(item => item.inCardId === cardId);
+    const departed = match.substitutions[side].find(item => item.outCardId === cardId);
+    const onMinute = started ? 0 : entered?.minute ?? 0;
+    const offMinute = departed?.minute ?? null;
+    const minutesPlayed = Math.max(0, (offMinute ?? finalMinute) - onMinute);
     const base = 6.1 + (playerOverall(card) - 82) / 20 + goals * 1.1 + assists * .55 + (random() - .5) * .6;
-    return { cardId: card.id, rating: Number(clamp(base, 5.7, 10).toFixed(1)), goals, assists };
+    return {
+      cardId: card.id,
+      rating: Number(clamp(base, 5.7, 10).toFixed(1)),
+      goals,
+      assists,
+      startingSlot: started ? startingSlot : null,
+      started,
+      onMinute,
+      offMinute,
+      minutesPlayed,
+    };
   }));
   const allRatings = match.playerRatings.flatMap((items, side) => items.map(item => ({ ...item, side })));
   allRatings.sort((a, b) => b.rating - a.rating);
   match.manOfMatch = allRatings[0];
   match.finalized = true;
   refreshMatchStats(match);
+  match.recap = buildMatchRecap(room, match);
   return finalDuration;
 }
 
@@ -735,6 +1291,27 @@ function startMatchSegment(room, match, segmentIndex) {
   match.currentSegment = segment.id;
   match.playState = 'playing';
   match.segmentStartedAt = segmentStartedAt;
+  match.tacticalPhases.push({
+    segment: segment.id,
+    fromMinute: segment.from,
+    toMinute: segment.to,
+    mentalities: room.players.map(player => player.mentality || 'balanced'),
+    matchup: match.tacticalMatchup ? {
+      ...match.tacticalMatchup,
+      bonus: { ...match.tacticalMatchup.bonus },
+    } : null,
+    teams: match.teams.map((team, side) => ({
+      side,
+      tactic: room.players[side].tactic,
+      mentality: room.players[side].mentality || 'balanced',
+      tacticalStatus: team.tacticalMatchup?.status || 'neutral',
+      attack: Number(team.attack.toFixed(2)),
+      midfield: Number(team.midfield.toFixed(2)),
+      defense: Number(team.defense.toFixed(2)),
+      positionFit: team.positionFit.score,
+      chemistry: team.chemistry.score,
+    })),
+  });
 
   if (segmentIndex === 0) {
     addMatchEvent(match, revealBase + 300, '0′', 'phase', null, `比赛开始！${room.players[0].name} 对阵 ${room.players[1].name}。`, true);
@@ -787,10 +1364,16 @@ function generateMatch(room) {
     playerRatings: [[], []],
     manOfMatch: null,
     tacticalMatchup: null,
+    tacticalPhases: [],
     interventions: [],
     currentWindow: null,
     substitutions: [[], []],
     mentalities: room.players.map(player => player.mentality || 'balanced'),
+    shotMap: [[], []],
+    shotDistribution: [null, null],
+    shootoutShotMap: [[], []],
+    shootoutShotDistribution: [null, null],
+    recap: null,
     finalized: false,
     _score: [0, 0],
     _penalty: [0, 0],
@@ -800,9 +1383,11 @@ function generateMatch(room) {
     ],
     _possessionHomePoints: 0,
     _possessionMinutes: 0,
+    _shotMap: [[], []],
     _elapsedBaseMs: 0,
     _pauseStartedAt: null,
     _participants: room.players.map(player => new Set(player.lineup.filter(Boolean).map(item => item.cardId))),
+    _startingLineups: room.players.map(player => player.lineup.map(item => item?.cardId || null)),
   };
   startMatchSegment(room, match, 0);
   return match;
@@ -899,7 +1484,15 @@ function resolveIntervention(room, reason) {
   });
 
   const resolvedAt = Date.now();
-  match.interventions.push({ id: window.id, minute: window.minute, openedAt: window.openedAt, resolvedAt, reason, submissions: resolved });
+  match.interventions.push({
+    id: window.id,
+    minute: window.minute,
+    score: [...match._score],
+    openedAt: window.openedAt,
+    resolvedAt,
+    reason,
+    submissions: resolved,
+  });
   const summary = resolved.map((item, side) => {
     const mentalityName = MENTALITIES[item.mentality].name;
     if (!item.substitution) return `${room.players[side].name}选择${mentalityName}`;
