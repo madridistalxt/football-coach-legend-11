@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#071711">
+  <meta name="description" content="足球教练-传奇11人：开卡签约、自由布阵并与好友模拟对战。">
+  <title>足球教练-传奇11人</title>
+  <link rel="stylesheet" href="/styles.css?v=4">
+</head>
+<body>
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
+
+  <main id="app" class="app-shell">
+    <section id="loadingScreen" class="loading-screen" aria-live="polite">
+      <div class="brand-mark brand-mark-large"><span>11</span></div>
+      <p>正在进入战术室…</p>
+    </section>
+
+    <section id="lobbyScreen" class="screen lobby-screen is-hidden">
+      <header class="lobby-header">
+        <div class="brand-lockup">
+          <div class="brand-mark"><span>11</span></div>
+          <div>
+            <p class="eyebrow">TACTICAL CARD DUEL</p>
+            <p class="brand-name">足球教练</p>
+          </div>
+        </div>
+        <span class="server-pill"><i></i> 好友对战服务在线</span>
+      </header>
+
+      <div class="hero-layout">
+        <div class="hero-copy">
+          <div class="season-chip">LEGEND SEASON · 2026</div>
+          <h1>传奇<span>11人</span></h1>
+          <p class="hero-lead">网罗五大联赛好手，押注传奇即战力。三分钟内完成战术部署，与好友见证一场必分胜负的绿茵推演。</p>
+          <div class="hero-path" aria-label="游戏流程">
+            <span><b>01</b> 组建</span><i></i><span><b>02</b> 布阵</span><i></i><span><b>03</b> 对决</span>
+          </div>
+          <div class="hero-visual" aria-hidden="true">
+            <div class="hero-card hero-card-back"><span>LEGEND</span></div>
+            <div class="hero-card hero-card-front">
+              <div class="mini-rating">96</div>
+              <div class="mini-avatar">传</div>
+              <strong>传奇球员</strong>
+              <small>FWD · LEGEND</small>
+            </div>
+            <div class="hero-ball">⚽</div>
+          </div>
+        </div>
+
+        <div class="lobby-actions glass-panel">
+          <div class="panel-heading">
+            <p class="eyebrow">COACH LOUNGE</p>
+            <h2>进入教练大厅</h2>
+            <p>创建房间或通过 6 位房间号加入好友。</p>
+          </div>
+
+          <label class="field-label" for="coachName">教练昵称</label>
+          <div class="input-shell">
+            <span aria-hidden="true">♙</span>
+            <input id="coachName" maxlength="16" autocomplete="nickname" placeholder="输入你的昵称">
+          </div>
+
+          <button id="createRoomBtn" class="primary-btn main-cta" type="button">
+            <span>创建好友房</span><small>获得专属房间号</small><b aria-hidden="true">→</b>
+          </button>
+
+          <div class="split-label"><span>或者加入比赛</span></div>
+
+          <label class="field-label" for="roomCode">房间号</label>
+          <div class="join-row">
+            <div class="input-shell code-input-shell">
+              <span aria-hidden="true">#</span>
+              <input id="roomCode" maxlength="6" inputmode="text" autocomplete="off" placeholder="例如 A7K9Q2">
+            </div>
+            <button id="searchRoomBtn" class="secondary-btn" type="button">搜索</button>
+          </div>
+
+          <div id="roomPreview" class="room-preview is-hidden" aria-live="polite"></div>
+          <p class="lobby-footnote"><span>●</span> 每位教练初始拥有 <strong>5,000</strong> 金币</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="gameScreen" class="screen game-screen is-hidden">
+      <header class="game-topbar">
+        <div class="brand-lockup compact">
+          <div class="brand-mark"><span>11</span></div>
+          <div>
+            <p class="brand-name">足球教练</p>
+            <p class="brand-sub">传奇11人</p>
+          </div>
+        </div>
+
+        <button id="copyCodeBtn" class="room-code-btn" type="button">
+          <span>好友房</span><strong id="roomCodeLabel">------</strong><b aria-hidden="true">⧉</b>
+        </button>
+
+        <div class="topbar-status">
+          <div class="status-item countdown-status">
+            <span>备战倒计时</span><strong id="countdownLabel">03:00</strong>
+          </div>
+          <div class="status-item coin-status">
+            <span class="coin-icon">G</span><div><small>我的金币</small><strong id="coinsLabel">5,000</strong></div>
+          </div>
+          <div id="opponentStatus" class="opponent-status"><i></i><span>等待对手</span></div>
+        </div>
+      </header>
+
+      <div id="waitingBanner" class="waiting-banner is-hidden">
+        <div class="waiting-pulse"><span></span></div>
+        <div>
+          <strong>房间已创建，等待好友加入</strong>
+          <p>分享房间号 <b id="waitingCode">------</b>，等待期间可以先开卡组建阵容。</p>
+        </div>
+        <div class="waiting-actions">
+          <button id="waitingCopyBtn" class="secondary-btn" type="button">复制房间号</button>
+          <button id="addBotBtn" class="ghost-btn" type="button">邀请 AI 试战</button>
+        </div>
+      </div>
+
+      <nav class="mobile-tabs" aria-label="备战功能">
+        <button type="button" data-mobile-panel="shop" class="is-active">卡包</button>
+        <button type="button" data-mobile-panel="pitch">布阵</button>
+        <button type="button" data-mobile-panel="inventory">待定</button>
+      </nav>
+
+      <div id="prepView" class="prep-layout">
+        <aside id="shopPanel" class="prep-panel shop-panel" data-panel="shop">
+          <div class="section-heading">
+            <div><p class="eyebrow">PLAYER MARKET</p><h2>球探卡包</h2></div>
+            <span>现役 5 张 · 传奇 3 张</span>
+          </div>
+          <div class="segmented-control" role="group" aria-label="卡包年代">
+            <button type="button" class="is-active" data-pack-era="current">现役联赛</button>
+            <button type="button" data-pack-era="legend">传奇殿堂</button>
+          </div>
+          <div id="packGrid" class="pack-grid"></div>
+          <div class="market-note">
+            <span aria-hidden="true">✦</span>
+            <p><strong>每局 5,000 金币，自由取舍</strong><br>现役包约 500，传奇包约 2,500，购买次数不限。</p>
+          </div>
+        </aside>
+
+        <section id="pitchPanel" class="prep-panel tactics-panel" data-panel="pitch">
+          <div class="section-heading tactics-heading">
+            <div><p class="eyebrow">TACTICS BOARD</p><h2>首发战术板</h2></div>
+            <div class="lineup-score"><span>阵容评分</span><strong id="lineupOverall">--</strong></div>
+          </div>
+
+          <div class="tactics-controls">
+            <label>阵型<select id="formationSelect"></select></label>
+            <label>战术<select id="tacticSelect"></select></label>
+            <button id="autoLineupBtn" class="secondary-btn" type="button">一键最佳阵容</button>
+          </div>
+          <p id="tacticDescription" class="tactic-description"></p>
+
+          <div id="mainPitch" class="football-pitch" aria-label="我的首发阵容战术板">
+            <div class="pitch-lines" aria-hidden="true">
+              <span class="halfway"></span><span class="center-circle"></span>
+              <span class="box box-top"></span><span class="box box-bottom"></span>
+              <span class="goal goal-top"></span><span class="goal goal-bottom"></span>
+            </div>
+            <div id="pitchSlots"></div>
+          </div>
+
+          <div class="selection-hint" id="selectionHint"><span>操作提示</span> 从右侧拖入球员，或先点球员再点场上位置。</div>
+          <div class="ready-zone">
+            <div class="readiness-copy">
+              <strong id="lineupCount">首发 0 / 11</strong>
+              <span id="readyHint">安排满11名不同球员后即可确认</span>
+            </div>
+            <button id="readyBtn" class="primary-btn ready-btn" type="button" disabled>确认阵容</button>
+          </div>
+        </section>
+
+        <aside id="inventoryPanel" class="prep-panel inventory-panel" data-panel="inventory">
+          <div class="section-heading">
+            <div><p class="eyebrow">SQUAD DEPOT</p><h2>阵容待定区</h2></div>
+            <span id="inventoryCount">0 张</span>
+          </div>
+          <div class="inventory-toolbar">
+            <div class="position-filters" role="group" aria-label="按位置筛选">
+              <button type="button" class="is-active" data-position="ALL">全部</button>
+              <button type="button" data-position="GK">门将</button>
+              <button type="button" data-position="DEF">后卫</button>
+              <button type="button" data-position="MID">中场</button>
+              <button type="button" data-position="FWD">锋线</button>
+            </div>
+          </div>
+          <div id="inventoryEmpty" class="inventory-empty">
+            <div class="empty-card-stack"><i></i><i></i><i></i></div>
+            <strong>待定区还是空的</strong>
+            <p>购买卡包后，球员卡会自动进入这里。</p>
+          </div>
+          <div id="inventoryList" class="inventory-list"></div>
+        </aside>
+      </div>
+
+      <section id="matchView" class="match-view is-hidden">
+        <div class="match-header">
+          <div class="match-stage"><i></i><span id="matchStage">比赛直播</span></div>
+          <div class="scoreboard">
+            <div class="score-team"><strong id="homeName">主队</strong><span id="homeFormation">4-3-3</span></div>
+            <div class="score-main"><span id="matchClock">0′</span><strong><b id="homeScore">0</b><i>:</i><b id="awayScore">0</b></strong><small id="penaltyScore"></small></div>
+            <div class="score-team away"><strong id="awayName">客队</strong><span id="awayFormation">4-3-3</span></div>
+          </div>
+          <button id="skipMatchBtn" class="ghost-btn" type="button">快速结算</button>
+        </div>
+
+        <div class="match-progress"><span id="matchProgressBar"></span></div>
+        <div class="match-layout">
+          <div id="homeBoard" class="mini-board"></div>
+          <div class="commentary-panel">
+            <div class="commentary-title"><h2>实时战况</h2><span class="live-dot">LIVE</span></div>
+            <div id="featuredEvent" class="featured-event"><span>0′</span><p>双方球员正在入场，比赛即将开始。</p></div>
+            <div id="eventFeed" class="event-feed" aria-live="polite"></div>
+            <div id="liveStats" class="live-stats"></div>
+          </div>
+          <div id="awayBoard" class="mini-board away-board"></div>
+        </div>
+      </section>
+
+      <section id="resultView" class="result-view is-hidden"></section>
+    </section>
+  </main>
+
+  <dialog id="packDialog" class="pack-dialog">
+    <div id="packExperience" class="pack-experience"></div>
+  </dialog>
+
+  <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+
+  <script type="module" src="/app.js?v=4"></script>
+</body>
+</html>
