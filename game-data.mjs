@@ -1,9 +1,130 @@
 import { CURRENT_PLAYER_EXPANSION } from './current-player-expansion.mjs';
 import { LEGEND_PLAYER_EXPANSION } from './legend-player-expansion.mjs';
 
-const card = (id, name, en, position, era, nation, club, league, tier, weight, stats) => ({
-  id, name, en, position, era, nation, club, league, tier, weight, stats,
+export const STAT_LABELS = Object.freeze({
+  pac: '速度',
+  sho: '射门',
+  pas: '传球',
+  dri: '盘带',
+  def: '防守',
+  phy: '身体',
+  gk: '守门',
 });
+
+export const POSITION_LABELS = Object.freeze({
+  GK: '门将',
+  DEF: '后卫',
+  MID: '中场',
+  FWD: '前锋',
+});
+
+export const PREFERRED_POSITION_LABELS = Object.freeze({
+  GK: '门将',
+  CB: '中后卫',
+  'FB/WB': '边后卫/翼卫',
+  CDM: '后腰',
+  CM: '中前卫',
+  CAM: '前腰',
+  'WM/W': '边前卫/边锋',
+  ST: '中锋',
+  CF: '影锋',
+});
+
+// 原始数据只有门将/后卫/中场/前锋四个大类，且没有左右侧信息。
+// 因此这里只按能力画像推导“位置族”，并在画像接近时给出一个次选位置，绝不猜测左/右位置。
+function derivePreferredPositions(position, stats) {
+  const { pac, sho, pas, dri, def, phy } = stats;
+
+  if (position === 'GK') return ['GK'];
+
+  if (position === 'DEF') {
+    const centreBackScore = def * .48 + phy * .26 + pas * .16 + pac * .1;
+    const wideBackScore = pac * .3 + dri * .26 + pas * .22 + def * .12 + phy * .1;
+    const hasWideBackProfile = pac >= def - 1 && dri >= def - 8 && pas >= def - 10;
+
+    if (hasWideBackProfile && wideBackScore >= centreBackScore - 1.5) {
+      const positions = ['FB/WB'];
+      if (def >= 78 && centreBackScore >= wideBackScore - 2.5) positions.push('CB');
+      return positions;
+    }
+
+    const positions = ['CB'];
+    if (hasWideBackProfile && pac >= 80 && wideBackScore >= centreBackScore - 3) positions.push('FB/WB');
+    return positions;
+  }
+
+  if (position === 'MID') {
+    const holdingScore = def * .34 + phy * .25 + pas * .24 + pac * .09 + dri * .08;
+    const centralScore = pas * .32 + dri * .22 + def * .15 + phy * .15 + sho * .08 + pac * .08;
+    const attackingScore = pas * .28 + dri * .3 + sho * .22 + pac * .12 + phy * .08;
+    const wideScore = pac * .32 + dri * .3 + pas * .2 + sho * .12 + phy * .06;
+    const hasHoldingProfile = def >= sho + 6 && (phy >= dri - 6 || def >= dri - 5);
+    const hasAttackingProfile = sho >= def + 8 && dri >= def + 10 && pas >= def + 10;
+    const hasWideProfile = pac >= pas && pac >= sho + 2 && dri >= pas - 3 && pac >= def + 8;
+
+    let primary = 'CM';
+    let primaryScore = centralScore;
+    if (hasHoldingProfile && holdingScore >= centralScore - 2) {
+      primary = 'CDM';
+      primaryScore = holdingScore;
+    } else if (hasWideProfile && wideScore >= Math.max(centralScore, attackingScore) - 1) {
+      primary = 'WM/W';
+      primaryScore = wideScore;
+    } else if (hasAttackingProfile && attackingScore >= centralScore - 1) {
+      primary = 'CAM';
+      primaryScore = attackingScore;
+    }
+
+    const positions = [primary];
+    if (primary !== 'CM' && centralScore >= primaryScore - 3) {
+      positions.push('CM');
+    } else if (primary === 'CM') {
+      const canAlsoHold = def >= sho + 4 && holdingScore >= centralScore - 4;
+      const canAlsoAttack = sho >= def + 5 && dri >= def + 8 && pas >= def + 8
+        && attackingScore >= centralScore - 2;
+      const canAlsoPlayWide = hasWideProfile && wideScore >= centralScore - 2;
+      if (canAlsoHold) positions.push('CDM');
+      else if (canAlsoAttack) positions.push('CAM');
+      else if (canAlsoPlayWide) positions.push('WM/W');
+    }
+    return positions;
+  }
+
+  const strikerScore = sho * .42 + phy * .24 + pac * .16 + dri * .12 + pas * .06;
+  const secondStrikerScore = dri * .28 + sho * .28 + pas * .23 + pac * .13 + phy * .08;
+  const wideForwardScore = pac * .33 + dri * .3 + pas * .18 + sho * .13 + phy * .06;
+  const hasWideProfile = pac >= sho + 4 && dri >= sho - 4 && pac >= phy + 4;
+  const hasSecondStrikerProfile = pas >= phy + 4 && dri >= sho - 2;
+
+  let primary = 'ST';
+  let primaryScore = strikerScore;
+  if (hasWideProfile && wideForwardScore >= Math.max(strikerScore, secondStrikerScore) - 1) {
+    primary = 'WM/W';
+    primaryScore = wideForwardScore;
+  } else if (hasSecondStrikerProfile && secondStrikerScore >= strikerScore - 1) {
+    primary = 'CF';
+    primaryScore = secondStrikerScore;
+  }
+
+  const positions = [primary];
+  if (primary !== 'ST' && strikerScore >= primaryScore - 3) {
+    positions.push('ST');
+  } else if (primary === 'ST' && hasSecondStrikerProfile && secondStrikerScore >= strikerScore - 2.5) {
+    positions.push('CF');
+  } else if (primary === 'ST' && hasWideProfile && wideForwardScore >= strikerScore - 2.5) {
+    positions.push('WM/W');
+  }
+  return positions;
+}
+
+const card = (id, name, en, position, era, nation, club, league, tier, weight, stats) => {
+  const preferredPositions = derivePreferredPositions(position, stats);
+  return {
+    id, name, en, position, era, nation, club, league, tier, weight, stats,
+    preferredPositions,
+    preferredPositionLabel: preferredPositions.map(code => PREFERRED_POSITION_LABELS[code]).join('、'),
+  };
+};
 
 const BASE_PLAYERS = [
   // 现役门将：覆盖五大联赛，以主力与实力派为主，巨星为低概率签位。
@@ -142,7 +263,7 @@ export const PLAYERS = [
   ...LEGEND_PLAYER_EXPANSION.map(spec => expandedCard(spec, 'legend')),
 ];
 
-// 仅在倒计时结束且阵容人数不足时用于补位，不会进入任何卡包。
+// 每局免费发放的基础阵容，不会进入任何卡包；抽包用于补强而非购买参赛资格。
 export const ACADEMY_PLAYERS = [
   card('academy-gk', '青训门将', 'Academy Keeper', 'GK', 'academy', '青训营', '教练学院', '青训', 'academy', 0, { pac: 50, sho: 20, pas: 55, dri: 48, def: 40, phy: 58, gk: 58 }),
   card('academy-def-1', '青训左卫', 'Academy Left Back', 'DEF', 'academy', '青训营', '教练学院', '青训', 'academy', 0, { pac: 60, sho: 44, pas: 55, dri: 54, def: 57, phy: 58, gk: 10 }),
@@ -204,9 +325,9 @@ export const FORMATIONS = {
 
 export const TACTICS = {
   balanced: { id: 'balanced', name: '攻守平衡', desc: '三线稳定，临场波动更小', attack: 1, midfield: 1, defense: 1, possession: 0 },
-  possession: { id: 'possession', name: '传控渗透', desc: '中场与控球提升，反击速度下降', attack: 1.02, midfield: 1.08, defense: 0.97, possession: 7 },
-  pressing: { id: 'pressing', name: '高位压迫', desc: '抢回球权并制造射门，体能消耗更高', attack: 1.06, midfield: 1.03, defense: 0.95, possession: 3 },
-  counter: { id: 'counter', name: '快速反击', desc: '降低控球，放大锋线速度与终结', attack: 1.09, midfield: 0.95, defense: 1.03, possession: -7 },
+  possession: { id: 'possession', name: '传控渗透', desc: '掌控中场并克制快速反击，但容易被高位压迫切断出球', attack: 1.02, midfield: 1.08, defense: 0.97, possession: 7 },
+  pressing: { id: 'pressing', name: '高位压迫', desc: '克制传控渗透并制造前场夺回，但身后空间会被快速反击利用', attack: 1.06, midfield: 1.03, defense: 0.95, possession: 3 },
+  counter: { id: 'counter', name: '快速反击', desc: '克制高位压迫并放大锋线速度，但会被持续传控压缩转换机会', attack: 1.09, midfield: 0.95, defense: 1.03, possession: -7 },
   wings: { id: 'wings', name: '两翼齐飞', desc: '边路推进更强，中央保护略降', attack: 1.05, midfield: 1, defense: 0.97, possession: 1 },
 };
 
@@ -214,6 +335,9 @@ export const META = {
   title: '足球教练-传奇11人',
   startingCoins: 5000,
   preparationSeconds: 180,
+  statLabels: STAT_LABELS,
+  positionLabels: POSITION_LABELS,
+  preferredPositionLabels: PREFERRED_POSITION_LABELS,
   players: ALL_PLAYERS,
   packs: PACKS,
   formations: FORMATIONS,
