@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#071711">
   <meta name="description" content="足球教练-传奇11人：开卡签约、自由布阵并与好友模拟对战。">
   <title>足球教练-传奇11人</title>
-  <link rel="stylesheet" href="/styles.css?v=4">
+  <link rel="stylesheet" href="/styles.css?v=6">
 </head>
 <body>
   <div class="ambient ambient-one"></div>
@@ -140,14 +140,18 @@
           <div id="packGrid" class="pack-grid"></div>
           <div class="market-note">
             <span aria-hidden="true">✦</span>
-            <p><strong>每局 5,000 金币，自由取舍</strong><br>现役包约 500，传奇包约 2,500，购买次数不限。</p>
+            <p><strong>免费基础11人已就位</strong><br>每局另有5,000金币用于补强；现役包约500，传奇包约2,500。</p>
           </div>
         </aside>
 
         <section id="pitchPanel" class="prep-panel tactics-panel" data-panel="pitch">
           <div class="section-heading tactics-heading">
             <div><p class="eyebrow">TACTICS BOARD</p><h2>首发战术板</h2></div>
-            <div class="lineup-score"><span>阵容评分</span><strong id="lineupOverall">--</strong></div>
+            <div class="lineup-summary">
+              <div class="lineup-score"><span>阵容评分</span><strong id="lineupOverall">--</strong></div>
+              <div class="lineup-score"><span>位置适配</span><strong id="positionFitScore">--</strong></div>
+              <div class="lineup-score"><span>球队默契</span><strong id="chemistryScore">--</strong></div>
+            </div>
           </div>
 
           <div class="tactics-controls">
@@ -211,6 +215,14 @@
         </div>
 
         <div class="match-progress"><span id="matchProgressBar"></span></div>
+        <div id="tacticalMatchupBanner" class="tactical-matchup-banner is-neutral"><strong>战术均势</strong><span>比赛开始后显示双方战术克制关系。</span></div>
+        <div id="livePitchScene" class="live-pitch-scene" aria-label="二维比赛动态场景">
+          <div class="live-pitch-markings" aria-hidden="true"><i></i><i></i><i></i></div>
+          <div id="livePitchActors" class="live-pitch-actors" aria-hidden="true"></div>
+          <span id="livePitchPulse" class="live-pitch-pulse" aria-hidden="true"></span>
+          <span id="liveBall" class="live-ball" aria-hidden="true"></span>
+          <div class="live-pitch-caption"><span id="livePitchMinute">0′</span><strong id="livePitchCaption">双方正在中圈列队</strong></div>
+        </div>
         <div class="match-layout">
           <div id="homeBoard" class="mini-board"></div>
           <div class="commentary-panel">
@@ -220,6 +232,10 @@
             <div id="liveStats" class="live-stats"></div>
           </div>
           <div id="awayBoard" class="mini-board away-board"></div>
+        </div>
+        <div id="goalCinematic" class="goal-cinematic" role="status" aria-live="assertive" aria-hidden="true">
+          <div class="goal-cinematic-rays" aria-hidden="true"></div>
+          <div class="goal-cinematic-content"><span>GOAL</span><strong id="goalCinematicTitle">进球</strong><b id="goalCinematicScore">1 : 0</b><p id="goalCinematicText"></p></div>
         </div>
       </section>
 
@@ -231,8 +247,12 @@
     <div id="packExperience" class="pack-experience"></div>
   </dialog>
 
+  <dialog id="interventionDialog" class="intervention-dialog">
+    <div id="interventionBody" class="intervention-body"></div>
+  </dialog>
+
   <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
 
-  <script type="module" src="/app.js?v=4"></script>
+  <script type="module" src="/app.js?v=6"></script>
 </body>
 </html>
